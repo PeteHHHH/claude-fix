@@ -13,8 +13,9 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 : "${ASC_KEY_ID:?Set ASC_KEY_ID (App Store Connect API key ID)}"
 : "${ASC_ISSUER_ID:?Set ASC_ISSUER_ID (App Store Connect API issuer ID)}"
 
-if [ ! -f "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" ]; then
-  echo "Missing $HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" >&2
+AUTH_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+if [ ! -f "$AUTH_KEY_PATH" ]; then
+  echo "Missing $AUTH_KEY_PATH" >&2
   exit 1
 fi
 
@@ -40,12 +41,20 @@ xcodebuild \
   -configuration Release \
   -sdk iphoneos \
   -archivePath "$BUILD_DIR/app.xcarchive" \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$AUTH_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive
 
 xcodebuild -exportArchive \
   -archivePath "$BUILD_DIR/app.xcarchive" \
   -exportPath "$BUILD_DIR/export" \
-  -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist"
+  -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$AUTH_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
 IPA="$(find "$BUILD_DIR/export" -name '*.ipa' -print -quit)"
 if [ -z "$IPA" ]; then

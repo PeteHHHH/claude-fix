@@ -83,3 +83,11 @@ workflow.
   keyword slips through anyway and a later step fails, the workflow
   reopens the issue as part of reporting that failure, so a failed run
   never leaves an issue closed.
+- A retry doesn't skip the steps that failed last time just because Claude
+  finds nothing left to fix in the code. If issue #12's code fix already
+  landed on main but the TestFlight upload failed, a `/fix` retry has
+  Claude correctly make no new commit — but the workflow still knows (from
+  Claude's fix commit and/or the build-number-bump commit already carrying
+  "issue #12" in their message) that this issue's fix isn't shipped yet, so
+  it reuses the already-bumped build number and retries the upload instead
+  of posting "nothing needed shipping" and stopping.

@@ -200,17 +200,40 @@ jobs:
       - name: Pull the commit Claude just pushed
         run: git pull --ff-only origin main
 
-      - name: Check whether code actually changed
+      - name: Check whether a release is still needed
         id: diff
         run: |
-          if [ "$(git rev-parse HEAD)" = "${{ steps.before.outputs.sha }}" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          CODE_CHANGED_THIS_RUN=false
+          if [ "$(git rev-parse HEAD)" != "${{ steps.before.outputs.sha }}" ]; then
+            CODE_CHANGED_THIS_RUN=true
+          fi
+          echo "changed=$CODE_CHANGED_THIS_RUN" >> "$GITHUB_OUTPUT"
+
+          # A previous attempt on this same issue can have already landed the
+          # code fix (and even the build-number bump) on main and then failed
+          # at a later step, most often the TestFlight upload. On a retry,
+          # Claude usually and correctly finds nothing left to change in the
+          # code — which used to make the workflow conclude "nothing needed
+          # shipping" and skip straight past the steps that actually failed
+          # last time. So don't gate on this run's own diff alone: also check
+          # git history for this issue's fix commit and bump commit (both
+          # carry "issue #$ISSUE_NUMBER" in their message — Claude's by
+          # instruction, the bump commit's always) to tell "genuinely nothing
+          # to fix" apart from "already fixed, still needs shipping".
+          ALREADY_BUMPED=false
+          if git log --format=%s | grep -Eiq "^Bump build number to [0-9]+ for issue #$ISSUE_NUMBER\$"; then
+            ALREADY_BUMPED=true
+          fi
+          echo "already_bumped=$ALREADY_BUMPED" >> "$GITHUB_OUTPUT"
+
+          if [ "$CODE_CHANGED_THIS_RUN" = "true" ] || git log --format=%s | grep -Eiq "issue #$ISSUE_NUMBER"; then
+            echo "needs_release=true" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "needs_release=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Comment when nothing needed shipping
-        if: steps.diff.outputs.changed == 'false'
+        if: steps.diff.outputs.needs_release == 'false'
         run: |
           echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER needed no code change — nothing shipped"
           {
@@ -224,18 +247,27 @@ jobs:
 
       - name: Bump build number
         id: version
-        if: steps.diff.outputs.changed == 'true'
+        if: steps.diff.outputs.needs_release == 'true'
         run: |
-          NEW_VERSION=$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}")
-          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          git add -A -- . ':!.claude-fix-tools'
-          git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
-            commit -m "Bump build number to $NEW_VERSION for issue #$ISSUE_NUMBER"
-          git push origin main
+          if [ "${{ steps.diff.outputs.already_bumped }}" = "true" ]; then
+            # A previous attempt on this issue already bumped and pushed the
+            # build number; only a later step (most likely the TestFlight
+            # upload) failed. Reuse that version instead of bumping again.
+            EXISTING_VERSION=$(git log --format=%s | grep -Ei "^Bump build number to [0-9]+ for issue #$ISSUE_NUMBER\$" | head -1 | grep -oE '[0-9]+' | head -1)
+            echo "version=$EXISTING_VERSION" >> "$GITHUB_OUTPUT"
+            echo "Reusing build $EXISTING_VERSION, already bumped for issue #$ISSUE_NUMBER by a previous attempt."
+          else
+            NEW_VERSION=$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}")
+            echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+            git add -A -- . ':!.claude-fix-tools'
+            git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
+              commit -m "Bump build number to $NEW_VERSION for issue #$ISSUE_NUMBER"
+            git push origin main
+          fi
 
       - name: Archive, export, and upload to TestFlight
         id: release
-        if: steps.diff.outputs.changed == 'true' && inputs.enable_testflight
+        if: steps.diff.outputs.needs_release == 'true' && inputs.enable_testflight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -244,7 +276,7 @@ jobs:
         run: bash .claude-fix-tools/scripts/export_and_upload.sh
 
       - name: Comment with result
-        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
+        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.needs_release == 'true'
         run: |
           # Only a build that actually reached TestFlight (or wasn't meant to,
           # per enable_testflight) counts as fully shipped. Anything else —
@@ -281,7 +313,7 @@ jobs:
           fi
 
       - name: Notify
-        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
+        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.needs_release == 'true'
         run: |
           if [ "${{ steps.release.outcome }}" = "success" ]; then
             bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: shipped" "Issue #$ISSUE_NUMBER fixed, build ${{ steps.version.outputs.version }} uploading to TestFlight."

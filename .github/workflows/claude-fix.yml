@@ -117,6 +117,13 @@ jobs:
             echo
             echo "Follow CLAUDE.md exactly: verify the build before considering the"
             echo "fix done, then commit and push directly to main yourself."
+            echo
+            echo "Do NOT use a GitHub closing keyword (Closes/Fixes/Resolves, etc.) with"
+            echo "the issue number in your commit message. This workflow closes the issue"
+            echo "itself once the build-number bump and TestFlight upload after your commit"
+            echo "have also succeeded — a closing keyword would close it the moment your"
+            echo "commit lands, even if a later step then fails. Just reference the issue"
+            echo "plainly, e.g. 'Issue #$ISSUE_NUMBER: ...'."
           } > "$RUNNER_TEMP/prompt.txt"
 
           echo "Other claude processes running at start of this attempt:"
@@ -174,6 +181,13 @@ jobs:
         if: steps.claude.outputs.is_error == 'true'
         run: |
           echo "::error title=claude-fix::Claude couldn't resolve issue #$ISSUE_NUMBER — see the summary comment"
+          # Safety net: if Claude committed something (e.g. with a closing keyword
+          # in the message, against instructions) before still reporting is_error,
+          # GitHub may have already auto-closed the issue. A failed run must never
+          # leave the issue closed.
+          if [ "$(gh issue view "$ISSUE_NUMBER" --json state -q .state)" = "CLOSED" ]; then
+            gh issue reopen "$ISSUE_NUMBER" || true
+          fi
           {
             echo "❌ Couldn't finish this one automatically."
             echo
@@ -232,13 +246,26 @@ jobs:
       - name: Comment with result
         if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
         run: |
-          if [ "${{ steps.release.outcome }}" = "success" ]; then
+          # Only a build that actually reached TestFlight (or wasn't meant to,
+          # per enable_testflight) counts as fully shipped. Anything else —
+          # including an upload failure — must not close the issue, and must
+          # reopen it if a closing keyword in Claude's commit already did.
+          if [ "${{ steps.release.outcome }}" = "success" ] || [ "${{ inputs.enable_testflight }}" = "false" ]; then
+            SHIPPED=true
+          else
+            SHIPPED=false
+          fi
+
+          if [ "$SHIPPED" = "true" ]; then
             echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER fixed and shipped — build ${{ steps.version.outputs.version }} uploading to TestFlight"
           else
             echo "::warning title=claude-fix::Issue #$ISSUE_NUMBER fix landed on main, but the TestFlight upload failed (build ${{ steps.version.outputs.version }})"
+            if [ "$(gh issue view "$ISSUE_NUMBER" --json state -q .state)" = "CLOSED" ]; then
+              gh issue reopen "$ISSUE_NUMBER" || true
+            fi
           fi
           {
-            if [ "${{ steps.release.outcome }}" = "success" ]; then
+            if [ "$SHIPPED" = "true" ]; then
               echo "✅ Fixed and shipped: build ${{ steps.version.outputs.version }} is uploading to TestFlight."
             else
               echo "⚠️ Code fix landed on main, but the TestFlight upload failed or was skipped (build ${{ steps.version.outputs.version }}). Check the workflow run."
@@ -248,6 +275,10 @@ jobs:
             cat "$RUNNER_TEMP/claude-summary.txt"
           } > "$RUNNER_TEMP/comment.txt"
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.txt"
+
+          if [ "$SHIPPED" = "true" ]; then
+            gh issue close "$ISSUE_NUMBER"
+          fi
 
       - name: Notify
         if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
@@ -263,5 +294,11 @@ jobs:
         run: |
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           echo "::error title=claude-fix::Unexpected failure on issue #$ISSUE_NUMBER — see $RUN_URL"
+          # Same safety net as the other failure paths: an unexpected failure
+          # must never leave the issue closed, even if an earlier commit's
+          # message closed it against instructions.
+          if [ "$(gh issue view "$ISSUE_NUMBER" --json state -q .state)" = "CLOSED" ]; then
+            gh issue reopen "$ISSUE_NUMBER" || true
+          fi
           gh issue comment "$ISSUE_NUMBER" --body "❌ claude-fix hit an unexpected error before it could finish or report back. [See the run log]($RUN_URL)." || true
           osascript -e "display notification \"Issue #$ISSUE_NUMBER: workflow failed unexpectedly.\" with title \"$GH_REPO: claude-fix crashed\"" || true

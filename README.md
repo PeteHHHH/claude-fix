@@ -74,3 +74,12 @@ workflow.
   prompt as history. So commenting `/fix` again after a failed attempt gives
   Claude what the last attempt tried and why it didn't land, instead of
   starting over cold.
+- The issue only gets closed once the fix has actually shipped — the
+  workflow closes it itself after the build-number bump and (if enabled)
+  the TestFlight upload succeed, not the moment Claude's commit lands.
+  Claude is told not to use a GitHub closing keyword (`Closes #N`, etc.) in
+  its commit message for this reason — that would close the issue
+  immediately on push, even if a later step then fails. If a closing
+  keyword slips through anyway and a later step fails, the workflow
+  reopens the issue as part of reporting that failure, so a failed run
+  never leaves an issue closed.

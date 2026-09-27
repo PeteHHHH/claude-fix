@@ -2,9 +2,37 @@ name: reusable-test
 
 on:
   workflow_call:
+    inputs:
+      scheme:
+        required: true
+        type: string
+      bundle_id:
+        required: true
+        type: string
+      team_id:
+        required: true
+        type: string
+      xcodeproj_path:
+        required: true
+        type: string
+      enable_testflight:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      NTFY_TOPIC:
+        required: false
 
 jobs:
   test:
+    permissions:
+      contents: write
+      issues: write
     runs-on: [self-hosted, macOS]
+    timeout-minutes: 90
     steps:
-      - run: echo hi
+      - run: echo "hi ${{ inputs.scheme }} ${{ inputs.bundle_id }} ${{ inputs.team_id }} ${{ inputs.xcodeproj_path }} ${{ inputs.enable_testflight }}"

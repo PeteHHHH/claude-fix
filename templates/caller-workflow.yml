@@ -16,6 +16,14 @@ concurrency:
 
 jobs:
   fix:
+    # Required even though the reusable workflow's own job also declares
+    # this - a calling job's permissions are a hard ceiling on what the
+    # workflow it invokes can request. Without it here too, the org's
+    # read-only default GITHUB_TOKEN cap rejects the whole run at dispatch
+    # time (startup_failure, zero jobs created).
+    permissions:
+      contents: write
+      issues: write
     if: >
       github.event.issue.pull_request == null &&
       startsWith(github.event.comment.body, '/fix') &&

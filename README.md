@@ -55,7 +55,13 @@ workflow.
   keychain. With it set, every run fails with "Not logged in".
 - The job requests `contents: write` and `issues: write` explicitly, since
   this org caps the default `GITHUB_TOKEN` at read-only — without this,
-  every `gh issue comment` and `git push` fails with a 403.
+  every `gh issue comment` and `git push` fails with a 403. This has to be
+  declared in **both** the caller's job and the reusable workflow's own job —
+  a calling job's permissions are a hard ceiling on what it invokes, so
+  omitting it from the caller rejects the whole run at dispatch time
+  (`startup_failure`, zero jobs created, "nested job 'fix' is requesting
+  ..., but is only allowed ..."). `templates/caller-workflow.yml` already
+  includes it.
 - If the code fix fails to build, the workflow stops there — no push, no
   TestFlight upload, no false "shipped" claim. If the fix lands but the
   TestFlight upload fails, you're told which one happened.

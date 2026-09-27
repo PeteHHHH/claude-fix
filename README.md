@@ -68,12 +68,16 @@ workflow.
 - TestFlight upload (when enabled) is fully automatic once the build
   succeeds — there is no manual approval gate before it reaches external
   testers on that app.
-- Retries aren't blind: before doing anything else, the run pulls every
-  status comment claude-fix previously posted on that issue (working-on-it,
-  success, failure, no-change-needed, crash) and feeds it back into the
-  prompt as history. So commenting `/fix` again after a failed attempt gives
-  Claude what the last attempt tried and why it didn't land, instead of
-  starting over cold.
+- Retries aren't blind: the prompt tells Claude to run
+  `gh issue view $ISSUE_NUMBER --comments` itself before doing anything else,
+  so it reads the full thread — any discussion, plus this workflow's own
+  status comments from prior attempts (working-on-it, shipped, landed but
+  didn't ship, failed, no-change-needed). Commenting `/fix` again after a
+  failed attempt gives Claude what the last attempt tried and why it didn't
+  land, instead of starting over cold. The workflow doesn't fetch or inject
+  any of that itself — it's cheap for Claude to pull with a tool call it
+  already has (`gh issue *` is in `--allowedTools`), so there's no reason to
+  duplicate it in the prompt.
 - The issue only gets closed once the fix has actually shipped — the
   workflow closes it itself after the build-number bump and (if enabled)
   the TestFlight upload succeed, not the moment Claude's commit lands.

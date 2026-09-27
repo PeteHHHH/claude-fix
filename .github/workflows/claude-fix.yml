@@ -47,27 +47,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
     steps:
-      - name: Gather history from previous attempts
-        id: history
-        run: |
-          # Pull every status comment claude-fix has previously posted on this
-          # issue (working-on-it / success / failure / no-change-needed / crash)
-          # so a retry isn't starting cold — it should know what was already
-          # tried and why it did or didn't land, before this run posts its own
-          # "Working on it" comment below.
-          gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | test("🤖 Working on it|❌ Couldn.?t finish|ℹ️ Looked into it|✅ Fixed and shipped|⚠️ Code fix landed|claude-fix hit an unexpected error")) | "### " + .created_at + "\n" + .body + "\n"' \
-            > "$RUNNER_TEMP/history.txt" 2>/dev/null || true
-
-          if [ -s "$RUNNER_TEMP/history.txt" ]; then
-            echo "has_history=true" >> "$GITHUB_OUTPUT"
-            echo "Found prior attempt history:"
-            cat "$RUNNER_TEMP/history.txt"
-          else
-            echo "has_history=false" >> "$GITHUB_OUTPUT"
-            echo "No prior attempts found for issue #$ISSUE_NUMBER."
-          fi
-
       - name: Acknowledge
         run: |
           # A just-created issue can lag behind on GitHub's GraphQL backend for a
@@ -105,13 +84,14 @@ jobs:
             echo
             echo "${{ github.event.issue.body }}"
             echo
-            if [ "${{ steps.history.outputs.has_history }}" = "true" ]; then
-              echo "Previous /fix attempts on this issue, oldest first — read these before"
-              echo "starting so you don't repeat a dead end, redo work that already landed,"
-              echo "or lose context a prior attempt already worked out:"
-              echo
-              cat "$RUNNER_TEMP/history.txt"
-            fi
+            echo "Before doing anything else, run 'gh issue view $ISSUE_NUMBER --comments'"
+            echo "yourself to read the full thread on this issue — every comment, not just"
+            echo "the one below. That includes any discussion and, if this issue has been"
+            echo "through /fix before, this workflow's own status comments on prior attempts"
+            echo "(🤖 working on it, ✅ shipped, ⚠️ landed but didn't ship, ❌ failed, ℹ️ no"
+            echo "change needed). Use that to avoid repeating a dead end, redoing work that"
+            echo "already landed, or losing context a prior attempt already worked out."
+            echo
             echo "Latest instruction from the /fix comment:"
             echo "${{ github.event.comment.body }}"
             echo

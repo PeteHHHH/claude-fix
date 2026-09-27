@@ -98,7 +98,7 @@ jobs:
           for attempt in 1 2 3; do
             set +e
             claude -p "$(cat "$RUNNER_TEMP/prompt.txt")" \
-              --allowedTools "Edit Write Read Glob Grep Bash(git *) Bash(xcodebuild *) Bash(python3 *) Bash(xcrun *) Bash(cp *) Bash(ls *) Bash(cat *) Bash(find *) Bash(mkdir *) Bash(env) Bash(printenv *)" \
+              --allowedTools "Edit Write Read Glob Grep Bash(git *) Bash(xcodebuild *) Bash(python3 *) Bash(xcrun *) Bash(cp *) Bash(ls *) Bash(cat *) Bash(find *) Bash(mkdir *) Bash(env) Bash(printenv *) Bash(xcodegen *) Bash(sed *) Bash(grep *) Bash(rm *) Bash(which *) Bash(command *) Bash(pwd) Bash(swift *) Bash(echo *) Bash(gh issue *) Bash(gh pr *) Bash(gh run *)" \
               --output-format json \
               > "$RUNNER_TEMP/claude-result.json" \
               2> "$RUNNER_TEMP/claude-stderr.log"

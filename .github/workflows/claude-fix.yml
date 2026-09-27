@@ -186,7 +186,7 @@ jobs:
         run: |
           NEW_VERSION=$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}")
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          git add "${{ inputs.xcodeproj_path }}/project.pbxproj"
+          git add -A -- . ':!.claude-fix-tools'
           git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
             commit -m "Bump build number to $NEW_VERSION for issue #$ISSUE_NUMBER"
           git push origin main

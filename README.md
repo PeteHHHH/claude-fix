@@ -68,3 +68,9 @@ workflow.
 - TestFlight upload (when enabled) is fully automatic once the build
   succeeds — there is no manual approval gate before it reaches external
   testers on that app.
+- Retries aren't blind: before doing anything else, the run pulls every
+  status comment claude-fix previously posted on that issue (working-on-it,
+  success, failure, no-change-needed, crash) and feeds it back into the
+  prompt as history. So commenting `/fix` again after a failed attempt gives
+  Claude what the last attempt tried and why it didn't land, instead of
+  starting over cold.

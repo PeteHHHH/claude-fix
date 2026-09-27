@@ -12,6 +12,12 @@ every repo in `PeteHHHH` — see the `commute`/`catch-my-train` repo's
 `scripts/setup-runner.sh` for how that's registered; it only needs doing once
 for the whole org, not per repo.
 
+This repo is private, and GitHub blocks other repos from calling a private
+repo's reusable workflows by default (`access_level: none` — every caller run
+fails instantly with zero jobs created, "likely failed because of a workflow
+file issue"). One-time fix, already done as of 2026-09-27:
+`gh api repos/PeteHHHH/claude-fix/actions/permissions/access -X PUT -f access_level=organization`.
+
 ## Adding claude-fix to a repo
 
 1. Copy `templates/caller-workflow.yml` to that repo's `.github/workflows/claude-fix.yml`

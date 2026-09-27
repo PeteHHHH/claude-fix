@@ -1,0 +1,10 @@
+name: reusable-test
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: [self-hosted, macOS]
+    steps:
+      - run: echo hi

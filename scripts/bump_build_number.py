@@ -41,7 +41,11 @@ if project_yml.exists():
         sys.exit("Could not find CURRENT_PROJECT_VERSION in project.yml")
 
     project_yml.write_text(new_text)
-    subprocess.run(["xcodegen", "generate"], check=True)
+    result = subprocess.run(["xcodegen", "generate"], capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        sys.exit(f"xcodegen generate failed with exit code {result.returncode}")
     print(new_version)
 else:
     pbxproj = Path(args.xcodeproj) / "project.pbxproj"

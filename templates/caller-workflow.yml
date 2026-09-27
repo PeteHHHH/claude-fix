@@ -1,0 +1,30 @@
+name: claude-fix
+
+# Copy this file to .github/workflows/claude-fix.yml in the repo you want to
+# give claude-fix to. Fill in the `with:` values for that repo's Xcode
+# project, and add ASC_KEY_ID/ASC_ISSUER_ID (and optionally NTFY_TOPIC) as
+# secrets on this repo, or as org-level secrets scoped to it — see
+# https://github.com/PeteHHHH/claude-fix/blob/main/README.md.
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: >
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/fix') &&
+      github.event.comment.user.login == 'petehhhhh'
+    uses: PeteHHHH/claude-fix/.github/workflows/claude-fix.yml@main
+    with:
+      scheme: CHANGE_ME           # xcodebuild -scheme value
+      bundle_id: CHANGE_ME        # PRODUCT_BUNDLE_IDENTIFIER of the app target
+      team_id: CHANGE_ME          # Apple Developer team ID
+      xcodeproj_path: CHANGE_ME.xcodeproj
+      # enable_testflight: false  # uncomment to land fixes on main without shipping
+    secrets: inherit

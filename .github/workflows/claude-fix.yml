@@ -1,0 +1,239 @@
+name: claude-fix (reusable)
+
+# Shared implementation. Repos don't call this directly on issue_comment - each
+# repo has its own tiny caller workflow (see templates/caller-workflow.yml) that
+# does the /fix + login gating, then invokes this with its own scheme/bundle-id/
+# team-id. Runs on the shared mac-mini-runner (org-level self-hosted runner), so
+# it has access to the Mac's Xcode, signing keychain, and logged-in Claude Code
+# subscription. See README.md for one-time setup shared by every caller repo.
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        required: true
+        type: string
+      bundle_id:
+        required: true
+        type: string
+      team_id:
+        required: true
+        type: string
+      xcodeproj_path:
+        required: true
+        type: string
+      enable_testflight:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      NTFY_TOPIC:
+        required: false
+
+jobs:
+  fix:
+    permissions:
+      contents: write
+      issues: write
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 90
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - name: Acknowledge
+        run: |
+          # A just-created issue can lag behind on GitHub's GraphQL backend for a
+          # few seconds, so retry rather than fail the whole run over this.
+          for i in 1 2 3 4 5; do
+            gh issue comment "$ISSUE_NUMBER" --body "🤖 Working on it..." && break
+            echo "Retrying acknowledge comment ($i/5)..."
+            sleep 3
+          done
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Checkout claude-fix tooling
+        uses: actions/checkout@v4
+        with:
+          repository: PeteHHHH/claude-fix
+          path: .claude-fix-tools
+
+      - name: Record starting commit
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude Code on the issue
+        id: claude
+        run: |
+          set -o pipefail
+          {
+            echo "Resolve this GitHub issue in the ${{ github.event.repository.name }} repo."
+            echo
+            echo "Issue #$ISSUE_NUMBER: ${{ github.event.issue.title }}"
+            echo
+            echo "${{ github.event.issue.body }}"
+            echo
+            echo "Latest instruction from the /fix comment:"
+            echo "${{ github.event.comment.body }}"
+            echo
+            echo "Follow CLAUDE.md exactly: verify the build before considering the"
+            echo "fix done, then commit and push directly to main yourself."
+          } > "$RUNNER_TEMP/prompt.txt"
+
+          echo "Other claude processes running at start of this attempt:"
+          pgrep -fl "claude -p" || echo "(none)"
+
+          CLAUDE_EXIT=1
+          for attempt in 1 2 3; do
+            set +e
+            claude -p "$(cat "$RUNNER_TEMP/prompt.txt")" \
+              --allowedTools "Edit Write Read Glob Grep Bash(git *) Bash(xcodebuild *) Bash(python3 *) Bash(xcrun *) Bash(cp *) Bash(ls *) Bash(cat *) Bash(find *) Bash(mkdir *) Bash(env) Bash(printenv *)" \
+              --output-format json \
+              > "$RUNNER_TEMP/claude-result.json" \
+              2> "$RUNNER_TEMP/claude-stderr.log"
+            CLAUDE_EXIT=$?
+            set -e
+
+            echo "Attempt $attempt: claude exited $CLAUDE_EXIT, stdout $(wc -c < "$RUNNER_TEMP/claude-result.json") bytes"
+
+            if [ "$CLAUDE_EXIT" -eq 0 ] && jq -e . "$RUNNER_TEMP/claude-result.json" > /dev/null 2>&1; then
+              break
+            fi
+
+            echo "--- stderr (attempt $attempt) ---"
+            cat "$RUNNER_TEMP/claude-stderr.log"
+            echo "--- stdout (attempt $attempt) ---"
+            cat "$RUNNER_TEMP/claude-result.json"
+            echo "Other claude processes running right after failure:"
+            pgrep -fl "claude -p" || echo "(none)"
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Retrying in 10s in case this was transient..."
+              sleep 10
+            fi
+          done
+
+          if [ "$CLAUDE_EXIT" -eq 0 ] && jq -e . "$RUNNER_TEMP/claude-result.json" > /dev/null 2>&1; then
+            cat "$RUNNER_TEMP/claude-result.json"
+            IS_ERROR=$(jq -r '.is_error' "$RUNNER_TEMP/claude-result.json")
+            echo "is_error=$IS_ERROR" >> "$GITHUB_OUTPUT"
+            jq -r '.result' "$RUNNER_TEMP/claude-result.json" > "$RUNNER_TEMP/claude-summary.txt"
+          else
+            echo "is_error=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "claude exited $CLAUDE_EXIT after 3 attempts with no usable JSON output."
+              echo
+              echo "Last attempt's stderr:"
+              cat "$RUNNER_TEMP/claude-stderr.log"
+              echo
+              echo "Last attempt's raw stdout:"
+              cat "$RUNNER_TEMP/claude-result.json"
+            } > "$RUNNER_TEMP/claude-summary.txt"
+          fi
+
+      - name: Report failure and stop
+        if: steps.claude.outputs.is_error == 'true'
+        run: |
+          echo "::error title=claude-fix::Claude couldn't resolve issue #$ISSUE_NUMBER — see the summary comment"
+          {
+            echo "❌ Couldn't finish this one automatically."
+            echo
+            cat "$RUNNER_TEMP/claude-summary.txt"
+          } > "$RUNNER_TEMP/comment.txt"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.txt"
+          bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: fix failed" "Issue #$ISSUE_NUMBER needs a look."
+          exit 1
+
+      - name: Pull the commit Claude just pushed
+        run: git pull --ff-only origin main
+
+      - name: Check whether code actually changed
+        id: diff
+        run: |
+          if [ "$(git rev-parse HEAD)" = "${{ steps.before.outputs.sha }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment when nothing needed shipping
+        if: steps.diff.outputs.changed == 'false'
+        run: |
+          echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER needed no code change — nothing shipped"
+          {
+            echo "ℹ️ Looked into it, but nothing needed to change on main — no build was shipped."
+            echo
+            echo "Summary from Claude:"
+            cat "$RUNNER_TEMP/claude-summary.txt"
+          } > "$RUNNER_TEMP/comment.txt"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.txt"
+          bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: no change needed" "Issue #$ISSUE_NUMBER: nothing to ship."
+
+      - name: Bump build number
+        id: version
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          NEW_VERSION=$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          git add "${{ inputs.xcodeproj_path }}/project.pbxproj"
+          git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
+            commit -m "Bump build number to $NEW_VERSION for issue #$ISSUE_NUMBER"
+          git push origin main
+
+      - name: Archive, export, and upload to TestFlight
+        id: release
+        if: steps.diff.outputs.changed == 'true' && inputs.enable_testflight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          SCHEME: ${{ inputs.scheme }}
+          TEAM_ID: ${{ inputs.team_id }}
+        run: bash .claude-fix-tools/scripts/export_and_upload.sh
+
+      - name: Comment with result
+        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
+        run: |
+          if [ "${{ steps.release.outcome }}" = "success" ]; then
+            echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER fixed and shipped — build ${{ steps.version.outputs.version }} uploading to TestFlight"
+          else
+            echo "::warning title=claude-fix::Issue #$ISSUE_NUMBER fix landed on main, but the TestFlight upload failed (build ${{ steps.version.outputs.version }})"
+          fi
+          {
+            if [ "${{ steps.release.outcome }}" = "success" ]; then
+              echo "✅ Fixed and shipped: build ${{ steps.version.outputs.version }} is uploading to TestFlight."
+            else
+              echo "⚠️ Code fix landed on main, but the TestFlight upload failed or was skipped (build ${{ steps.version.outputs.version }}). Check the workflow run."
+            fi
+            echo
+            echo "Summary from Claude:"
+            cat "$RUNNER_TEMP/claude-summary.txt"
+          } > "$RUNNER_TEMP/comment.txt"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.txt"
+
+      - name: Notify
+        if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.changed == 'true'
+        run: |
+          if [ "${{ steps.release.outcome }}" = "success" ]; then
+            bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: shipped" "Issue #$ISSUE_NUMBER fixed, build ${{ steps.version.outputs.version }} uploading to TestFlight."
+          else
+            bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: needs attention" "Issue #$ISSUE_NUMBER: fix landed but TestFlight upload failed or was skipped."
+          fi
+
+      - name: Catch anything unhandled
+        if: failure() && steps.claude.outputs.is_error != 'true'
+        run: |
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          echo "::error title=claude-fix::Unexpected failure on issue #$ISSUE_NUMBER — see $RUN_URL"
+          gh issue comment "$ISSUE_NUMBER" --body "❌ claude-fix hit an unexpected error before it could finish or report back. [See the run log]($RUN_URL)." || true
+          osascript -e "display notification \"Issue #$ISSUE_NUMBER: workflow failed unexpectedly.\" with title \"$GH_REPO: claude-fix crashed\"" || true

@@ -1,8 +1,12 @@
 #!/bin/bash
 # Archives the app, exports an App Store-signed IPA, and uploads it to
-# TestFlight. Requires SCHEME, TEAM_ID, ASC_KEY_ID, and ASC_ISSUER_ID in the
-# environment, and the matching AuthKey_<ASC_KEY_ID>.p8 file at
-# ~/.appstoreconnect/private_keys/ (the default location altool/Xcode look in).
+# TestFlight - automatic signing throughout (-allowProvisioningUpdates lets
+# xcodebuild create/renew certs and profiles itself via the API key below,
+# so this needs no manually-created Apple Distribution cert or provisioning
+# profile on the machine running it). Requires SCHEME, TEAM_ID, ASC_KEY_ID,
+# and ASC_ISSUER_ID in the environment, and the matching
+# AuthKey_<ASC_KEY_ID>.p8 file at ~/.appstoreconnect/private_keys/ (the
+# default location altool/Xcode look in).
 set -euo pipefail
 
 BUILD_DIR="$(mktemp -d)"
@@ -46,6 +50,20 @@ xcodebuild \
   -authenticationKeyID "$ASC_KEY_ID" \
   -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive
+
+# Fail loudly rather than silently uploading a wrongly-signed build - checks
+# every top-level .app and any embedded .appex (widgets/share extensions)
+# actually resolved to Apple Distribution/$TEAM_ID, not e.g. a stale
+# Development identity from automatic signing picking the wrong team.
+while IFS= read -r -d '' bundle; do
+  identity="$(codesign -dvv "$bundle" 2>&1 | grep '^Authority=' | head -1)"
+  team="$(codesign -dvv "$bundle" 2>&1 | grep '^TeamIdentifier=')"
+  echo "Signed: ${bundle#"$BUILD_DIR/app.xcarchive/"} -> $identity | $team"
+  if [[ "$identity" != *"Apple Distribution"* ]] || [[ "$team" != *"$TEAM_ID"* ]]; then
+    echo "$bundle signed with '$identity' ($team), not Apple Distribution/$TEAM_ID" >&2
+    exit 1
+  fi
+done < <(find "$BUILD_DIR/app.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -print0; find "$BUILD_DIR/app.xcarchive/Products/Applications" -name '*.appex' -print0)
 
 xcodebuild -exportArchive \
   -archivePath "$BUILD_DIR/app.xcarchive" \

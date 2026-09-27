@@ -37,6 +37,42 @@ To land fixes on `main` without ever touching TestFlight (e.g. while still
 testing a new repo), set `enable_testflight: false` in that repo's caller
 workflow.
 
+## Shipping interactively ("ship this to TestFlight")
+
+`/fix` only ever bumps the build number, never `MARKETING_VERSION` - a real
+release is a separate, explicit action. That's `scripts/ship.sh` here, plus
+the personal `ship` skill at `~/.claude/skills/ship/SKILL.md` that triggers
+on "ship this"/"ship to TestFlight" in any claude-fix caller repo. It's the
+one script/skill every repo uses - no per-repo copy to drift out of sync -
+and it signs exactly the way `/fix` does: automatic signing + an App Store
+Connect API key (`export_and_upload.sh`, same as below), never a
+manually-created Apple Distribution cert or provisioning profile.
+
+One-time setup, shared by every repo (same Apple Developer account/team):
+
+- Create `~/.appstoreconnect/ship_env` on the machine you ship from:
+  ```
+  export ASC_KEY_ID=<key id>
+  export ASC_ISSUER_ID=<issuer id>
+  ```
+  Reuse the `ASC_KEY_ID`/`ASC_ISSUER_ID` already configured as this repo's
+  secrets (same values, since it's one shared key across apps) — the
+  Issuer ID isn't retrievable via the GitHub API once it's a secret, so
+  copy it from App Store Connect → Users and Access → Integrations →
+  App Store Connect API (or wherever you saved it when the key was made).
+  The matching `AuthKey_<ASC_KEY_ID>.p8` must already be at
+  `~/.appstoreconnect/private_keys/` (same file `export_and_upload.sh`
+  uses for `/fix`).
+
+To ship: from any caller repo's root, say "ship this" (or run
+`.claude-fix-tools/scripts/ship.sh` directly - clone/pull this repo to
+`.claude-fix-tools/` first if it isn't already sitting there from a prior
+`/fix` run). It fetches/merges `origin/main`, does a Release smoke build,
+bumps `MARKETING_VERSION` (auto-incrementing, or pass an explicit version
+as `$1`) and `CURRENT_PROJECT_VERSION` together, commits + pushes to
+`main`, then archives/exports/uploads via `export_and_upload.sh` - the
+exact same script and signing path `/fix` uses for its own upload step.
+
 ## Safety notes
 
 - Only comments from `petehhhhh` trigger a run — the gating `if:` lives in

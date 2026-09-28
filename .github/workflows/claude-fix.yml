@@ -258,7 +258,7 @@ jobs:
             echo "marketing=$NEW_MARKETING" >> "$GITHUB_OUTPUT"
             echo "build=$NEW_BUILD" >> "$GITHUB_OUTPUT"
 
-            git add -A -- . ':!.claude-fix-tools'
+            git add -A
             git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
               commit -m "Bump to $NEW_MARKETING ($NEW_BUILD) for issue #$ISSUE_NUMBER"
             git push origin main

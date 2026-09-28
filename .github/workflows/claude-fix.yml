@@ -6,6 +6,10 @@ name: claude-fix (reusable)
 # team-id. Runs on the shared mac-mini-runner (org-level self-hosted runner), so
 # it has access to the Mac's Xcode, signing keychain, and logged-in Claude Code
 # subscription. See README.md for one-time setup shared by every caller repo.
+#
+# Two jobs, mutually exclusive on the triggering comment's text: `fix`
+# resolves one issue (a plain /fix comment); `fixall` (/fixall) queues a
+# /fix on every open issue in the repo instead of resolving anything itself.
 
 on:
   workflow_call:
@@ -36,6 +40,11 @@ on:
 
 jobs:
   fix:
+    # /fixall is handled entirely by the fixall job below - without this
+    # guard, this job would also run for it (since it starts with "/fix"
+    # too, which is what the caller's own gating checks for) and try to
+    # "resolve" the literal text /fixall as if it were a fix instruction.
+    if: ${{ !startsWith(github.event.comment.body, '/fixall') }}
     permissions:
       contents: write
       issues: write
@@ -334,3 +343,38 @@ jobs:
           fi
           gh issue comment "$ISSUE_NUMBER" --body "❌ claude-fix hit an unexpected error before it could finish or report back. [See the run log]($RUN_URL)." || true
           osascript -e "display notification \"Issue #$ISSUE_NUMBER: workflow failed unexpectedly.\" with title \"$GH_REPO: claude-fix crashed\"" || true
+
+  fixall:
+    # /fixall queues a plain "/fix" comment on every open issue instead of
+    # resolving anything itself - each one then runs through the fix job
+    # above exactly like a normal /fix, via its own separate issue_comment
+    # event. The single self-hosted runner means they queue and run one at
+    # a time rather than stampeding - no extra sequencing needed here.
+    if: startsWith(github.event.comment.body, '/fixall')
+    permissions:
+      issues: write
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 10
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Queue /fix on every open issue
+        run: |
+          # Deliberately no GH_TOKEN here (unlike the fix job above) - gh
+          # then falls back to this Mac's own logged-in `gh auth` session
+          # (petehhhhh), so the /fix comments posted below are genuinely
+          # authored by petehhhhh. Each caller workflow's own gating only
+          # fires /fix for comments from petehhhhh specifically, so posting
+          # these as github-actions[bot] (github.token's identity) would
+          # silently do nothing at all.
+          ISSUES="$(gh issue list --repo "$GH_REPO" --state open --json number -q '.[].number')"
+          if [ -z "$ISSUES" ]; then
+            gh issue comment "${{ github.event.issue.number }}" --repo "$GH_REPO" --body "ℹ️ /fixall: no open issues to fix." || true
+            exit 0
+          fi
+          COUNT="$(wc -l <<<"$ISSUES" | tr -d ' ')"
+          echo "Queuing /fix on $COUNT open issue(s): $(tr '\n' ' ' <<<"$ISSUES")"
+          gh issue comment "${{ github.event.issue.number }}" --repo "$GH_REPO" --body "🤖 /fixall: queuing /fix on $COUNT open issue(s) - they'll run one at a time on the runner." || true
+          while IFS= read -r n; do
+            gh issue comment "$n" --repo "$GH_REPO" --body "/fix"
+          done <<<"$ISSUES"

@@ -24,6 +24,9 @@ jobs:
     permissions:
       contents: write
       issues: write
+    # startsWith(..., '/fix') also matches /fixall - the reusable workflow's
+    # own fix vs. fixall jobs split on that internally, so this one gate
+    # covers both commands.
     if: >
       github.event.issue.pull_request == null &&
       startsWith(github.event.comment.body, '/fix') &&

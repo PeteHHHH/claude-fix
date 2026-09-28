@@ -2,10 +2,12 @@
 
 Shared implementation of the claude-fix pipeline: comment `/fix` on a GitHub
 issue and it gets picked up on the Mac Mini, fixed by Claude Code, verified,
-pushed to `main`, and shipped to TestFlight. `.github/workflows/claude-fix.yml`
-here is a **reusable workflow** — every repo that wants this capability adds a
-small caller workflow (see `templates/caller-workflow.yml`) instead of
-duplicating the logic.
+pushed to `main`, and shipped to TestFlight. Comment `/fixall` on any issue
+and it queues a `/fix` on every open issue in that repo instead (see
+"Fixing every open issue" below). `.github/workflows/claude-fix.yml` here is
+a **reusable workflow** — every repo that wants this capability adds a small
+caller workflow (see `templates/caller-workflow.yml`) instead of duplicating
+the logic.
 
 Runs on `mac-mini-runner`, a single org-level self-hosted runner shared by
 every repo in `PeteHHHH` — see the `commute`/`catch-my-train` repo's
@@ -36,6 +38,25 @@ file issue"). One-time fix, already done as of 2026-09-27:
 To land fixes on `main` without ever touching TestFlight (e.g. while still
 testing a new repo), set `enable_testflight: false` in that repo's caller
 workflow.
+
+## Fixing every open issue
+
+Comment `/fixall` on any issue in a claude-fix caller repo and the `fixall`
+job lists every open issue in that repo and posts a plain `/fix` comment on
+each one — it doesn't resolve anything itself. Each of those then runs
+through the normal `fix` job exactly like a manually-typed `/fix`, complete
+with its own status comments, retries, and TestFlight upload. Since there's
+only one self-hosted runner, they queue and run one at a time rather than
+all starting at once — no extra sequencing needed.
+
+The `/fix` comments it posts must come from `petehhhhh`, since that's what
+every caller workflow's own gating requires — a comment authored by
+`github-actions[bot]` (this workflow's own default identity via
+`github.token`) would be silently ignored. The `fixall` job works around
+this by deliberately not setting `GH_TOKEN` in its own step, so `gh` falls
+back to the Mac Mini's own logged-in `gh auth` session (`petehhhhh`)
+instead - the same keychain-backed login Claude Code itself relies on (see
+"Safety notes" below).
 
 ## Version numbers
 

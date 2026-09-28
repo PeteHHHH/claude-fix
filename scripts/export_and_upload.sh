@@ -51,20 +51,14 @@ xcodebuild \
   -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
   archive
 
-# Fail loudly rather than silently uploading a wrongly-signed build - checks
-# every top-level .app and any embedded .appex (widgets/share extensions)
-# actually resolved to Apple Distribution/$TEAM_ID, not e.g. a stale
-# Development identity from automatic signing picking the wrong team.
-while IFS= read -r -d '' bundle; do
-  identity="$(codesign -dvv "$bundle" 2>&1 | grep '^Authority=' | head -1)"
-  team="$(codesign -dvv "$bundle" 2>&1 | grep '^TeamIdentifier=')"
-  echo "Signed: ${bundle#"$BUILD_DIR/app.xcarchive/"} -> $identity | $team"
-  if [[ "$identity" != *"Apple Distribution"* ]] || [[ "$team" != *"$TEAM_ID"* ]]; then
-    echo "$bundle signed with '$identity' ($team), not Apple Distribution/$TEAM_ID" >&2
-    exit 1
-  fi
-done < <(find "$BUILD_DIR/app.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -print0; find "$BUILD_DIR/app.xcarchive/Products/Applications" -name '*.appex' -print0)
-
+# Deliberately NOT checking the archive's own codesign identity here - it's
+# commonly Development-signed even for a perfectly good automatic-signing
+# archive (confirmed empirically: a plain `xcodebuild archive` with
+# CODE_SIGN_STYLE=Automatic and no identity override consistently resolves
+# to the Development identity when both Development and Distribution are
+# valid, yet -exportArchive below still correctly re-signs the result with
+# Distribution). The archive's signature isn't what ships - the exported
+# .ipa is, and that's what gets validated after export instead.
 xcodebuild -exportArchive \
   -archivePath "$BUILD_DIR/app.xcarchive" \
   -exportPath "$BUILD_DIR/export" \
@@ -79,6 +73,24 @@ if [ -z "$IPA" ]; then
   echo "No .ipa found in $BUILD_DIR/export" >&2
   exit 1
 fi
+
+# Fail loudly rather than silently uploading a wrongly-signed build - unzip
+# the actual .ipa that's about to be uploaded and check every top-level
+# .app and embedded .appex (widgets/share extensions) really did end up
+# Apple Distribution/$TEAM_ID after export's re-signing, not e.g. a stale
+# Development identity from automatic signing picking the wrong team.
+IPA_CHECK_DIR="$BUILD_DIR/ipa-check"
+mkdir -p "$IPA_CHECK_DIR"
+unzip -q "$IPA" -d "$IPA_CHECK_DIR"
+while IFS= read -r -d '' bundle; do
+  identity="$(codesign -dvv "$bundle" 2>&1 | grep '^Authority=' | head -1)"
+  team="$(codesign -dvv "$bundle" 2>&1 | grep '^TeamIdentifier=')"
+  echo "Signed: ${bundle#"$IPA_CHECK_DIR/"} -> $identity | $team"
+  if [[ "$identity" != *"Apple Distribution"* ]] || [[ "$team" != *"$TEAM_ID"* ]]; then
+    echo "$bundle signed with '$identity' ($team), not Apple Distribution/$TEAM_ID - not uploading" >&2
+    exit 1
+  fi
+done < <(find "$IPA_CHECK_DIR/Payload" -maxdepth 1 -name '*.app' -print0; find "$IPA_CHECK_DIR/Payload" -name '*.appex' -print0)
 
 xcrun altool --upload-app \
   -f "$IPA" \

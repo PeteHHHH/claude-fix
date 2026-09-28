@@ -1,10 +1,13 @@
 #!/bin/bash
 # Interactive "ship this to TestFlight" pipeline - the one script every
-# claude-fix caller repo uses for a real, user-requested release (as opposed
-# to the /fix pipeline's own automatic build-number-only bump+upload). Run
-# from the target repo's root, e.g.:
+# claude-fix caller repo uses for a real, user-requested release, using the
+# exact same version-bump logic as the /fix pipeline's own automatic
+# TestFlight upload. Run from the target repo's root, e.g.:
 #
-#   .claude-fix-tools/scripts/ship.sh          # auto-bump: 1.0 -> 1.1
+#   .claude-fix-tools/scripts/ship.sh          # auto-bump: 1.0 -> 1.1 (or a
+#                                               # major bump, 1.9 -> 2.0, if
+#                                               # a lot has changed since the
+#                                               # last release - see below)
 #   .claude-fix-tools/scripts/ship.sh 1.2      # explicit MARKETING_VERSION
 #
 # Reads scheme/bundle_id/team_id/xcodeproj_path from the repo's own
@@ -74,7 +77,26 @@ xcodebuild build \
   || fail "Build isn't clean - fix before shipping."
 
 log "Bumping MARKETING_VERSION and CURRENT_PROJECT_VERSION"
-BUMP_OUT="$(cd "$REPO_ROOT" && python3 "$SCRIPT_DIR/bump_build_number.py" --xcodeproj "$XCODEPROJ_PATH" --bundle-id "$BUNDLE_ID" --marketing-version "${1:-auto}")"
+if [[ -n "${1:-}" ]]; then
+  BUMP_KIND="$1"
+else
+  # No explicit version given - decide auto vs. major from how much has
+  # changed since the last release (either a prior ship.sh run or a /fix
+  # auto-ship), same threshold and reasoning as the /fix pipeline.
+  LAST_RELEASE="$(git -C "$REPO_ROOT" log --format="%H %s" | grep -m1 -E "^[0-9a-f]+ (Ship [0-9.]+ \([0-9]+\) to TestFlight|Bump to [0-9.]+ \([0-9]+\) for issue #[0-9]+)\$" | cut -d' ' -f1)"
+  if [[ -n "$LAST_RELEASE" ]]; then
+    LINES_CHANGED=$(git -C "$REPO_ROOT" diff --shortstat "$LAST_RELEASE" HEAD | grep -oE '[0-9]+ (insertion|deletion)s?' | grep -oE '^[0-9]+' | awk '{s+=$1} END {print s+0}')
+  else
+    LINES_CHANGED=0
+  fi
+  echo "Lines changed since last release: $LINES_CHANGED"
+  BUMP_KIND=auto
+  if [[ "$LINES_CHANGED" -ge 1000 ]]; then
+    BUMP_KIND=major
+    log "Large change ($LINES_CHANGED lines) - doing a major version bump"
+  fi
+fi
+BUMP_OUT="$(cd "$REPO_ROOT" && python3 "$SCRIPT_DIR/bump_build_number.py" --xcodeproj "$XCODEPROJ_PATH" --bundle-id "$BUNDLE_ID" --marketing-version "$BUMP_KIND")"
 echo "$BUMP_OUT"
 NEW_MARKETING="$(sed -n 's/^MARKETING_VERSION=//p' <<<"$BUMP_OUT")"
 NEW_BUILD="$(sed -n 's/^CURRENT_PROJECT_VERSION=//p' <<<"$BUMP_OUT")"

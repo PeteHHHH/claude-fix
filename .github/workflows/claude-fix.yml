@@ -201,7 +201,7 @@ jobs:
           # instruction, the bump commit's always) to tell "genuinely nothing
           # to fix" apart from "already fixed, still needs shipping".
           ALREADY_BUMPED=false
-          if git log --format=%s | grep -Eiq "^Bump build number to [0-9]+ for issue #$ISSUE_NUMBER\$"; then
+          if git log --format=%s | grep -Eiq "^Bump to [0-9.]+ \([0-9]+\) for issue #$ISSUE_NUMBER\$"; then
             ALREADY_BUMPED=true
           fi
           echo "already_bumped=$ALREADY_BUMPED" >> "$GITHUB_OUTPUT"
@@ -225,23 +225,42 @@ jobs:
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.txt"
           bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: no change needed" "Issue #$ISSUE_NUMBER: nothing to ship."
 
-      - name: Bump build number
+      - name: Bump version
         id: version
         if: steps.diff.outputs.needs_release == 'true'
         run: |
           if [ "${{ steps.diff.outputs.already_bumped }}" = "true" ]; then
             # A previous attempt on this issue already bumped and pushed the
-            # build number; only a later step (most likely the TestFlight
-            # upload) failed. Reuse that version instead of bumping again.
-            EXISTING_VERSION=$(git log --format=%s | grep -Ei "^Bump build number to [0-9]+ for issue #$ISSUE_NUMBER\$" | head -1 | grep -oE '[0-9]+' | head -1)
-            echo "version=$EXISTING_VERSION" >> "$GITHUB_OUTPUT"
-            echo "Reusing build $EXISTING_VERSION, already bumped for issue #$ISSUE_NUMBER by a previous attempt."
+            # version; only a later step (most likely the TestFlight upload)
+            # failed. Reuse that version instead of bumping again.
+            EXISTING="$(git log --format=%s | grep -Ei "^Bump to [0-9.]+ \([0-9]+\) for issue #$ISSUE_NUMBER\$" | head -1)"
+            EXISTING_MARKETING="$(grep -oE '^Bump to [0-9.]+' <<<"$EXISTING" | grep -oE '[0-9.]+$')"
+            EXISTING_BUILD="$(grep -oE '\([0-9]+\)' <<<"$EXISTING" | tr -d '()')"
+            echo "marketing=$EXISTING_MARKETING" >> "$GITHUB_OUTPUT"
+            echo "build=$EXISTING_BUILD" >> "$GITHUB_OUTPUT"
+            echo "Reusing $EXISTING_MARKETING ($EXISTING_BUILD), already bumped for issue #$ISSUE_NUMBER by a previous attempt."
           else
-            NEW_VERSION=$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}")
-            echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+            # Every ship moves MARKETING_VERSION forward, not just the build
+            # number - a large diff (>=1000 changed lines this run) gets a
+            # major bump (e.g. 2.9 -> 3.0) instead of the usual minor one.
+            LINES_CHANGED=$(git diff --shortstat "${{ steps.before.outputs.sha }}" HEAD | grep -oE '[0-9]+ (insertion|deletion)s?' | grep -oE '^[0-9]+' | awk '{s+=$1} END {print s+0}')
+            echo "Lines changed this run: $LINES_CHANGED"
+            BUMP_KIND=auto
+            if [ "$LINES_CHANGED" -ge 1000 ]; then
+              BUMP_KIND=major
+              echo "::notice title=claude-fix::Large change ($LINES_CHANGED lines) — doing a major version bump"
+            fi
+
+            BUMP_OUT="$(python3 .claude-fix-tools/scripts/bump_build_number.py --xcodeproj "${{ inputs.xcodeproj_path }}" --bundle-id "${{ inputs.bundle_id }}" --marketing-version "$BUMP_KIND")"
+            echo "$BUMP_OUT"
+            NEW_MARKETING="$(sed -n 's/^MARKETING_VERSION=//p' <<<"$BUMP_OUT")"
+            NEW_BUILD="$(sed -n 's/^CURRENT_PROJECT_VERSION=//p' <<<"$BUMP_OUT")"
+            echo "marketing=$NEW_MARKETING" >> "$GITHUB_OUTPUT"
+            echo "build=$NEW_BUILD" >> "$GITHUB_OUTPUT"
+
             git add -A -- . ':!.claude-fix-tools'
             git -c user.name="claude-fix" -c user.email="noreply@anthropic.com" \
-              commit -m "Bump build number to $NEW_VERSION for issue #$ISSUE_NUMBER"
+              commit -m "Bump to $NEW_MARKETING ($NEW_BUILD) for issue #$ISSUE_NUMBER"
             git push origin main
           fi
 
@@ -268,19 +287,20 @@ jobs:
             SHIPPED=false
           fi
 
+          VERSION_STR="${{ steps.version.outputs.marketing }} (${{ steps.version.outputs.build }})"
           if [ "$SHIPPED" = "true" ]; then
-            echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER fixed and shipped — build ${{ steps.version.outputs.version }} uploading to TestFlight"
+            echo "::notice title=claude-fix::Issue #$ISSUE_NUMBER fixed and shipped — $VERSION_STR uploading to TestFlight"
           else
-            echo "::warning title=claude-fix::Issue #$ISSUE_NUMBER fix landed on main, but the TestFlight upload failed (build ${{ steps.version.outputs.version }})"
+            echo "::warning title=claude-fix::Issue #$ISSUE_NUMBER fix landed on main, but the TestFlight upload failed ($VERSION_STR)"
             if [ "$(gh issue view "$ISSUE_NUMBER" --json state -q .state)" = "CLOSED" ]; then
               gh issue reopen "$ISSUE_NUMBER" || true
             fi
           fi
           {
             if [ "$SHIPPED" = "true" ]; then
-              echo "✅ Fixed and shipped: build ${{ steps.version.outputs.version }} is uploading to TestFlight."
+              echo "✅ Fixed and shipped: $VERSION_STR is uploading to TestFlight."
             else
-              echo "⚠️ Code fix landed on main, but the TestFlight upload failed or was skipped (build ${{ steps.version.outputs.version }}). Check the workflow run."
+              echo "⚠️ Code fix landed on main, but the TestFlight upload failed or was skipped ($VERSION_STR). Check the workflow run."
             fi
             echo
             echo "Summary from Claude:"
@@ -296,7 +316,7 @@ jobs:
         if: always() && steps.claude.outputs.is_error != 'true' && steps.diff.outputs.needs_release == 'true'
         run: |
           if [ "${{ steps.release.outcome }}" = "success" ]; then
-            bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: shipped" "Issue #$ISSUE_NUMBER fixed, build ${{ steps.version.outputs.version }} uploading to TestFlight."
+            bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: shipped" "Issue #$ISSUE_NUMBER fixed, ${{ steps.version.outputs.marketing }} (${{ steps.version.outputs.build }}) uploading to TestFlight."
           else
             bash .claude-fix-tools/scripts/notify.sh "$GH_REPO: needs attention" "Issue #$ISSUE_NUMBER: fix landed but TestFlight upload failed or was skipped."
           fi

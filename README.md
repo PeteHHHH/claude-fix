@@ -37,16 +37,28 @@ To land fixes on `main` without ever touching TestFlight (e.g. while still
 testing a new repo), set `enable_testflight: false` in that repo's caller
 workflow.
 
+## Version numbers
+
+Every real ship - both `/fix`'s own automatic TestFlight upload and a manual
+`scripts/ship.sh` run - bumps `MARKETING_VERSION` as well as
+`CURRENT_PROJECT_VERSION`, via the shared `scripts/bump_build_number.py`.
+The visible version always moves forward (e.g. 2.01 → 2.02) instead of
+sitting frozen while only the internal build number climbs in parentheses.
+A ship whose diff is large (≥1000 changed lines) gets a major bump instead
+(e.g. 2.9 → 3.0) - both `/fix` and `ship.sh` compute this the same way, from
+the diff since the start of the run (`/fix`) or since the last release
+commit (`ship.sh`).
+
 ## Shipping interactively ("ship this to TestFlight")
 
-`/fix` only ever bumps the build number, never `MARKETING_VERSION` - a real
-release is a separate, explicit action. That's `scripts/ship.sh` here, plus
-the personal `ship` skill at `~/.claude/skills/ship/SKILL.md` that triggers
-on "ship this"/"ship to TestFlight" in any claude-fix caller repo. It's the
-one script/skill every repo uses - no per-repo copy to drift out of sync -
-and it signs exactly the way `/fix` does: automatic signing + an App Store
-Connect API key (`export_and_upload.sh`, same as below), never a
-manually-created Apple Distribution cert or provisioning profile.
+`scripts/ship.sh` here, plus the personal `ship` skill at
+`~/.claude/skills/ship/SKILL.md` that triggers on "ship this"/"ship to
+TestFlight" in any claude-fix caller repo, is for a real, user-requested
+release outside the `/fix` flow. It's the one script/skill every repo
+uses - no per-repo copy to drift out of sync - and it signs exactly the way
+`/fix` does: automatic signing + an App Store Connect API key
+(`export_and_upload.sh`, same as below), never a manually-created Apple
+Distribution cert or provisioning profile.
 
 One-time setup, shared by every repo (same Apple Developer account/team):
 
@@ -68,10 +80,11 @@ To ship: from any caller repo's root, say "ship this" (or run
 `.claude-fix-tools/scripts/ship.sh` directly - clone/pull this repo to
 `.claude-fix-tools/` first if it isn't already sitting there from a prior
 `/fix` run). It fetches/merges `origin/main`, does a Release smoke build,
-bumps `MARKETING_VERSION` (auto-incrementing, or pass an explicit version
-as `$1`) and `CURRENT_PROJECT_VERSION` together, commits + pushes to
-`main`, then archives/exports/uploads via `export_and_upload.sh` - the
-exact same script and signing path `/fix` uses for its own upload step.
+bumps `MARKETING_VERSION` (auto-incrementing - minor by default, major if a
+lot has changed since the last release, or pass an explicit version as
+`$1`) and `CURRENT_PROJECT_VERSION` together, commits + pushes to `main`,
+then archives/exports/uploads via `export_and_upload.sh` - the exact same
+script and signing path `/fix` uses for its own upload step.
 
 ## Safety notes
 

@@ -12,13 +12,16 @@ Otherwise, only the buildSettings block for the given bundle id in
 project.pbxproj is bumped, leaving other targets (e.g. test bundles)
 untouched.
 
-With no --marketing-version, prints just the new build number (this is the
-claude-fix pipeline's own bump-on-every-merge behavior - callers there parse
-a single bare value, so this default output is load-bearing and must not
-change). Pass --marketing-version to also bump/set MARKETING_VERSION - used
-by scripts/ship.sh for an actual release, never by the /fix pipeline - which
-switches the output to `MARKETING_VERSION=<v>` / `CURRENT_PROJECT_VERSION=<n>`
-lines instead.
+Every real ship - both the /fix pipeline's own TestFlight upload and a manual
+scripts/ship.sh run - passes --marketing-version so MARKETING_VERSION always
+moves forward too (e.g. 2.01 -> 2.02), not just the internal build number
+sitting invisibly in parentheses. Pass 'auto' to bump the last dot-component
+(2.01 -> 2.02, preserving zero-padding), or 'major' to bump the leading
+component and reset the rest to 0 (2.09 -> 3.0) - the caller decides which
+based on how much changed. Output switches to `MARKETING_VERSION=<v>` /
+`CURRENT_PROJECT_VERSION=<n>` lines whenever --marketing-version is passed;
+omitting it prints just the bare new build number instead (kept only for
+callers that genuinely want a build-number-only bump).
 """
 import argparse
 import re
@@ -31,17 +34,26 @@ parser.add_argument("--xcodeproj", required=True, help="Path to the .xcodeproj d
 parser.add_argument("--bundle-id", required=True, help="PRODUCT_BUNDLE_IDENTIFIER of the app target to bump")
 parser.add_argument(
     "--marketing-version",
-    help="New MARKETING_VERSION, or 'auto' to bump the last dot-component (e.g. 1.0 -> 1.1). "
-    "Omit to leave MARKETING_VERSION untouched (the /fix pipeline's build-number-only behavior).",
+    help="New MARKETING_VERSION, 'auto' to bump the last dot-component (e.g. 2.01 -> 2.02), "
+    "or 'major' to bump the leading component and reset the rest (e.g. 2.09 -> 3.0). "
+    "Omit to leave MARKETING_VERSION untouched.",
 )
 args = parser.parse_args()
 
 
 def next_marketing_version(current: str) -> str:
-    if args.marketing_version != "auto":
+    if args.marketing_version not in ("auto", "major"):
         return args.marketing_version
-    major, _, minor = current.rpartition(".")
-    return f"{major}.{int(minor) + 1}"
+    major, dot, minor = current.rpartition(".")
+    if not dot:
+        # No dot component at all (e.g. a bare "3") - treat the whole
+        # string as the major version with an implicit ".0".
+        major, minor = current, "0"
+    if args.marketing_version == "major":
+        return f"{int(major) + 1}.0"
+    # Zero-pad to the width of the existing minor component so "2.01" ->
+    # "2.02" instead of dropping the leading zero to become "2.2".
+    return f"{major}.{str(int(minor) + 1).zfill(len(minor))}"
 
 
 project_yml = Path("project.yml")
